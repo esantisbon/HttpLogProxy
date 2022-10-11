@@ -1,16 +1,19 @@
-using Azure.Storage.Blobs;
+﻿using Azure.Storage.Blobs;
 
 using ICSharpCode.SharpZipLib.Zip;
 
+using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.IO;
 
 using System.Text;
+using System.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHttpClient();
 var app = builder.Build();
 RecyclableMemoryStreamManager memoryStreamManager = new RecyclableMemoryStreamManager();
-app.Map("/", async (HttpRequest request, IHttpClientFactory httpClientFactory, IConfiguration config) =>
+
+app.Map("/{**path}", async (HttpRequest request, IHttpClientFactory httpClientFactory, IConfiguration config) =>
 {
     string storageCnnStr = config.GetConnectionString("Storage")
         ?? config.GetValue<string>("StorageConnectionString")
@@ -21,19 +24,7 @@ app.Map("/", async (HttpRequest request, IHttpClientFactory httpClientFactory, I
     {
         return Results.BadRequest(error: "Storage not accesible!");
     }
-    string url = request.Query["url"];
-    if (string.IsNullOrEmpty(url))
-    {
-        string b64url = request.Query["b64url"];
-        if (!string.IsNullOrEmpty(b64url))
-        {
-            url = Encoding.UTF8.GetString(Convert.FromBase64String(b64url));
-        }
-    }
-    if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out var targetUri))
-    {
-        return Results.BadRequest(error: "target url missing or invalid!");
-    }
+
     await using var msZip = memoryStreamManager.GetStream();
     var sb = new StringBuilder();
     await using var outStream = new ZipOutputStream(msZip);
@@ -41,8 +32,13 @@ app.Map("/", async (HttpRequest request, IHttpClientFactory httpClientFactory, I
     var requestMessage = new HttpRequestMessage();
     var httpClient = httpClientFactory.CreateClient();
     var ahora = DateTime.UtcNow;
+    var targetUri = GetTargetUri(request);
+    if (targetUri == null)
+    {
+        return Results.BadRequest(error: "Target URL missing or invalid!");
+    }
     await using var msReqBody = memoryStreamManager.GetStream();
-    sb.Append(request.Method).Append(" ").Append(url).Append(" ").Append(request.Protocol).AppendLine();
+    sb.Append(request.Method).Append(" ").Append(targetUri.AbsoluteUri).Append(" ").Append(request.Protocol).AppendLine();
     foreach (var head in request.Headers)
     {
         foreach (string headerValue in head.Value)
@@ -52,10 +48,10 @@ app.Map("/", async (HttpRequest request, IHttpClientFactory httpClientFactory, I
             sb.AppendLine(headerValue);
         }
     }
-    if (!HttpMethods.IsGet(request.Method) &&
-        !HttpMethods.IsHead(request.Method) &&
-        !HttpMethods.IsDelete(request.Method) &&
-        !HttpMethods.IsTrace(request.Method))
+    if (!HttpMethods.IsGet(request.Method)
+        && !HttpMethods.IsHead(request.Method)
+        && !HttpMethods.IsDelete(request.Method)
+        && !HttpMethods.IsTrace(request.Method))
     {
         await using (request.Body)
         {
@@ -177,6 +173,69 @@ static string NormalizaNombreContenedor(string nombre)
         sb.Remove(0, 1);
     }
     return sb.ToString(0, Math.Min(sb.Length, 63));
+}
+
+static Uri GetTargetUri(HttpRequest request)
+{
+    var paramToRemove = new HashSet<string>();
+    string url = request.Query["url"];
+    if (string.IsNullOrEmpty(url))
+    {
+        string b64url = request.Query["b64url"];
+        if (!string.IsNullOrEmpty(b64url))
+        {
+            url = Encoding.UTF8.GetString(Convert.FromBase64String(b64url));
+        }
+        else
+        {
+            paramToRemove.Add("b64url");
+        }
+    }
+    else
+    {
+        paramToRemove.Add("url");
+    }
+    if (string.IsNullOrEmpty(url))
+    {
+        return null;
+    }
+    if (!url.StartsWith("https://", StringComparison.Ordinal) && !url.StartsWith("http://", StringComparison.Ordinal))
+    {
+        string scheme = request.Query["scheme"];
+        if (string.IsNullOrEmpty(scheme))
+        {
+            scheme = "https://";
+        }
+        else
+        {
+            paramToRemove.Add("scheme");
+        }
+        url = string.Concat(scheme, url);
+    }
+    if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out var targetUri))
+    {
+        return null;
+    }
+    if (!string.IsNullOrEmpty(request.Path))
+    {
+        targetUri = new Uri(targetUri, request.Path);
+    }
+    if (request.Query.Any())
+    {
+        targetUri = new Uri(targetUri, request.QueryString.ToString());
+        if (paramToRemove.Count > 0)
+        {
+            var qs = HttpUtility.ParseQueryString(request.QueryString.ToString());
+            foreach (var p in paramToRemove)
+            {
+                qs.Remove(p);
+            }
+            var uriBuilder = new UriBuilder(targetUri);
+            uriBuilder.Query = qs.ToString();
+            targetUri = uriBuilder.Uri;
+        }
+    }
+    return targetUri;
 }
 
 static HttpMethod GetMethod(string method)
