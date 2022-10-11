@@ -29,7 +29,11 @@ app.Map("/{**path}", async (HttpRequest request, IHttpClientFactory httpClientFa
     var targetUri = GetTargetUri(request);
     if (targetUri == null)
     {
-        return Results.BadRequest(error: "Target URL missing or invalid!");
+        var qs = HttpUtility.ParseQueryString(request.QueryString.ToString());
+        qs.Add("url", "www.example.com");
+        var uriBuilder = new UriBuilder(request.GetEncodedUrl());
+        uriBuilder.Query = qs.ToString();
+        return Results.Text($"<h1>Uso: {uriBuilder.Uri}</h1>", "text/html");
     }
     var context = request.HttpContext;
     var sb = new StringBuilder();
