@@ -33,7 +33,7 @@ app.Map("/{**path}", async (HttpRequest request, IHttpClientFactory httpClientFa
         qs.Add("url", "www.example.com");
         var uriBuilder = new UriBuilder(request.GetEncodedUrl());
         uriBuilder.Query = qs.ToString();
-        return Results.Text($"<h1>Uso: {uriBuilder.Uri}</h1>", "text/html");
+        return Results.Text($"<h2>Usos:</h2><br/><p>{uriBuilder.Uri}</p><p>{request.GetEncodedUrl()}www.example.com/&lt;Target path and querystring&gt;</p>", "text/html");
     }
     var context = request.HttpContext;
     var sb = new StringBuilder();
@@ -213,11 +213,20 @@ static Uri? GetTargetUri(HttpRequest request)
     {
         paramToRemove.Add("url");
     }
-    if (string.IsNullOrEmpty(url))
+    string path = request.Path;
+    if (string.IsNullOrEmpty(url)
+        && !string.IsNullOrWhiteSpace(path)
+        && !string.Equals(path, "/", StringComparison.Ordinal)
+        && !string.Equals(path, "favicon.ico", StringComparison.Ordinal)
+        && !string.Equals(path, "/favicon.ico", StringComparison.Ordinal))
     {
-        return null;
+        var pathParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        url = pathParts[0];
+        path = string.Join('/', pathParts.Skip(1));
     }
-    if (!url.StartsWith("https://", StringComparison.Ordinal) && !url.StartsWith("http://", StringComparison.Ordinal))
+    if (!string.IsNullOrEmpty(url)
+        && !url.StartsWith("https://", StringComparison.Ordinal)
+        && !url.StartsWith("http://", StringComparison.Ordinal))
     {
         string scheme = request.Query["scheme"];
         if (string.IsNullOrEmpty(scheme))
@@ -234,9 +243,9 @@ static Uri? GetTargetUri(HttpRequest request)
     {
         return null;
     }
-    if (!string.IsNullOrEmpty(request.Path))
+    if (!string.IsNullOrEmpty(path))
     {
-        targetUri = new Uri(targetUri, request.Path);
+        targetUri = new Uri(targetUri, path);
     }
     if (request.Query.Any())
     {
